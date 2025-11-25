@@ -1,0 +1,12 @@
+{
+    "name": "lol-analysis-app",
+    "version": "1.0.0",
+    "description": "League of Legends Analysis App (Frontend + Backend)",
+    "scripts": {
+        "start": "concurrently \"npm run start --prefix server\" \"npm run dev --prefix client\"",
+        "install-all": "npm install && npm install --prefix server && npm install --prefix client"
+    },
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}
