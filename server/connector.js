@@ -28,7 +28,7 @@ class LCUConnector {
     }
 
     async getCredentials() {
-        // Method 1: Check Lockfile (Prioritize Riot Client)
+        // Method 1: Check Lockfile
         const commonPaths = [
             'C:\\Riot Games\\League of Legends\\lockfile',
             'D:\\Riot Games\\League of Legends\\lockfile',
@@ -45,7 +45,6 @@ class LCUConnector {
                 try {
                     const content = fs.readFileSync(p, 'utf8');
                     console.log(`Lockfile content (JSON): ${JSON.stringify(content)}`);
-                    // Lockfile format: ProcessName:PID:Port:Password:Protocol
                     const parts = content.split(':');
                     if (parts.length >= 5) {
                         return {
@@ -83,7 +82,7 @@ class LCUConnector {
 
         if (wmicResult) return wmicResult;
 
-        // Method 3: Check Process (PowerShell - Fallback)
+        // Method 3: Check Process (PowerShell)
         const psResult = await new Promise((resolve) => {
             const psCommand = `Get-CimInstance Win32_Process -Filter "Name = 'LeagueClientUx.exe'" | Select-Object -ExpandProperty CommandLine`;
             exec(`powershell -Command "${psCommand}"`, (psErr, psStdout) => {
@@ -111,43 +110,93 @@ class LCUConnector {
 
         if (psResult) return psResult;
 
-        // Method 4: Check Log Files (PowerShell - Deep Search)
-        // This is necessary for WeGame/CN clients where lockfile is empty and process args are hidden
+        // Method 4: Check Log Files (PowerShell via Script File)
         const logResult = await new Promise((resolve) => {
             console.log('Searching log files for credentials...');
-            const psLogCommand = `
-                $log = Get-ChildItem "H:\\WeGameApps\\英雄联盟" -Recurse -Filter "*LeagueClientUx.log*" | Sort-Object LastWriteTime | Select-Object -Last 1;
+            const psScriptContent = `
+                Write-Output "DEBUG: Script started"
+                $OutputEncoding = [System.Console]::OutputEncoding = [System.Console]::InputEncoding = [System.Text.Encoding]::UTF8;
+                Write-Output "DEBUG: Encoding set"
+                
+                try {
+                    $log = Get-ChildItem "H:\\WeGameApps\\英雄联盟" -Recurse -Filter "*LeagueClientUx.log*" -ErrorAction Stop | Sort-Object LastWriteTime | Select-Object -Last 1;
+                    Write-Output "DEBUG: Log search completed"
+                } catch {
+                    Write-Output "DEBUG: Get-ChildItem failed: $_"
+                    exit
+                }
+                
                 if ($log) {
-                    $content = Get-Content $log.FullName;
-                    $port = $content | Select-String "--app-port=(\\d+)" | ForEach-Object { $_.Matches.Groups[1].Value } | Select-Object -First 1;
-                    $pass = $content | Select-String "--remoting-auth-token=([\\w-]+)" | ForEach-Object { $_.Matches.Groups[1].Value } | Select-Object -First 1;
-                    if ($port -and $pass) {
-                        Write-Output "$port|$pass";
+                    Write-Output "DEBUG: Found log file: $($log.FullName)"
+                    try {
+                        $stream = [System.IO.File]::Open($log.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite);
+                        Write-Output "DEBUG: File opened"
+                        $reader = New-Object System.IO.StreamReader($stream);
+                        $content = $reader.ReadToEnd();
+                        $reader.Close();
+                        $stream.Close();
+                        Write-Output "DEBUG: Content read, length: $($content.Length)"
+
+                        $port = $content | Select-String -Pattern "--app-port=(\\d+)" -AllMatches | ForEach-Object { $_.Matches | ForEach-Object { $_.Groups[1].Value } } | Select-Object -First 1;
+                        $pass = $content | Select-String -Pattern "--remoting-auth-token=([\\w-]+)" -AllMatches | ForEach-Object { $_.Matches | ForEach-Object { $_.Groups[1].Value } } | Select-Object -First 1;
+                        Write-Output "DEBUG: Regex extraction done. Port: $port, Pass length: $($pass.Length)"
+                        
+                        if ($port -and $pass) {
+                            Write-Output "$port|$pass";
+                        } else {
+                            Write-Output "DEBUG: Regex failed. Port: $port, Pass: $pass"
+                        }
+                    } catch {
+                        Write-Output "DEBUG: Read failed: $_"
                     }
+                } else {
+                    Write-Output "DEBUG: No log file found"
                 }
             `;
 
-            exec(`powershell -Command "${psLogCommand.replace(/\n/g, ' ')}"`, (err, stdout) => {
-                if (!err && stdout && stdout.trim()) {
-                    const [port, password] = stdout.trim().split('|');
-                    if (port && password) {
-                        console.log('Found credentials in log file');
-                        resolve({
-                            port: port,
-                            password: password,
-                            protocol: 'https'
-                        });
-                        return;
+            const scriptPath = path.join(__dirname, 'get_creds.ps1');
+            try {
+                // PowerShell scripts need UTF-16 LE encoding for Chinese characters to work correctly
+                const scriptBuffer = Buffer.from('\ufeff' + psScriptContent, 'utf16le');
+                fs.writeFileSync(scriptPath, scriptBuffer);
+                console.log(`DEBUG: Script written to ${scriptPath}`);
+
+                exec(`powershell -ExecutionPolicy Bypass -File "${scriptPath}"`, (err, stdout, stderr) => {
+                    try { fs.unlinkSync(scriptPath); } catch (e) { }
+
+                    console.log('PowerShell Stdout:', stdout || '(empty)');
+                    console.log('PowerShell Stderr:', stderr || '(empty)');
+                    if (err) {
+                        console.log('PowerShell Exec Error:', err.message);
                     }
-                }
-                console.log('Log file search failed');
+
+                    if (!err && stdout && stdout.trim()) {
+                        const lines = stdout.trim().split('\n');
+                        for (const line of lines) {
+                            const [port, password] = line.trim().split('|');
+                            if (port && password && !isNaN(port)) {
+                                console.log('Found credentials in log file');
+                                resolve({
+                                    port: port,
+                                    password: password,
+                                    protocol: 'https'
+                                });
+                                return;
+                            }
+                        }
+                    }
+                    console.log('Log file search failed');
+                    resolve(null);
+                });
+            } catch (writeErr) {
+                console.error('Failed to write PowerShell script:', writeErr);
                 resolve(null);
-            });
+            }
         });
 
         if (logResult) return logResult;
 
-        // Method 5: Hardcoded Fallback (Last Resort)
+        // Method 5: Hardcoded Fallback
         console.log('Trying hardcoded credentials as last resort...');
         return {
             port: '53045',
