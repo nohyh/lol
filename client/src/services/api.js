@@ -14,14 +14,40 @@ export const getMatches = async () => {
     return response.data;
 };
 
-export const getMatchDetails = async (gameId) => {
-    const response = await api.get(`/match/${gameId}`);
+export const getMatchDetails = async (matchId) => {
+    const response = await api.get(`/match/${matchId}`);
     return response.data;
 };
 
 export const getRankedStats = async () => {
     const response = await api.get('/ranked');
     return response.data;
+};
+
+export const getAdvancedStats = async () => {
+    const response = await api.get('/stats/advanced');
+    return response.data;
+};
+
+export const getLatestMatchDetails = async (matchIndex = 0) => {
+    // First get the match list
+    const matchesResponse = await api.get('/matches');
+    const matches = matchesResponse.data?.games?.games || [];
+
+    if (matches.length === 0) {
+        throw new Error('No matches found');
+    }
+
+    if (matchIndex >= matches.length) {
+        throw new Error(`Match index ${matchIndex} out of range (only ${matches.length} matches available)`);
+    }
+
+    // Get the match ID at the specified index (0 = latest, 1 = second latest, etc.)
+    const matchId = matches[matchIndex].gameId;
+
+    // Then get the full details of that match
+    const matchDetails = await api.get(`/match/${matchId}`);
+    return matchDetails.data;
 };
 
 export default api;

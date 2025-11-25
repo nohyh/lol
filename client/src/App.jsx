@@ -7,10 +7,6 @@ function App() {
 
   return (
     <div className="container">
-      <div className="header" style={{ marginTop: '2rem' }}>
-        <h1 style={{ color: 'var(--accent)' }}>LoL Personal Analysis</h1>
-      </div>
-
       <Dashboard onSummonerLoaded={setSummoner} />
 
       {summoner && (
