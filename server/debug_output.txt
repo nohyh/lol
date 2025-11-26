@@ -1,0 +1,42 @@
+--- DEBUGGING STATS GENERATION ---
+
+Game ID: 10424496670
+Keys in game object: endOfGameResult, gameCreation, gameCreationDate, gameDuration, gameId, gameMode, gameModeMutators, gameType, gameVersion, mapId, participantIdentities, participants, platformId, queueId, seasonId, teams
+Found participantIdentities array! Length: 1
+First identity: {
+  "participantId": 10,
+  "player": {
+    "accountId": 0,
+    "currentAccountId": 0,
+    "currentPlatformId": "HN1",
+    "gameName": "hyhyhtyjfdg1232u",
+    "matchHistoryUri": "",
+    "platformId": "HN1",
+    "profileIcon": 1113,
+    "puuid": "e3ae71f0-1b52-5a2e-a46d-3998ff0f8db8",
+    "summonerId": 2655281409273440,
+    "summonerName": "",
+    "tagLine": "59887"
+  }
+}
+First participant object keys: championId, highestAchievedSeasonTier, participantId, spell1Id, spell2Id, stats, teamId, timeline
+First participant object (partial): {
+  "championId": 99,
+  "highestAchievedSeasonTier": "",
+  "participantId": 10,
+  "spell1Id": 4,
+  "spell2Id": 6,
+  "stats": {
+    "assists": 22,
+    "causedEarlySurrender": false,
+    "champLevel": 16,
+    "combatPlayerScore": 0,
+    "damageDealtToObjectives": 0,
+    "damageDealtToTurrets": 0,
+    "damageSelfMitigated": 11728,
+    "deaths": 11,
+    "doubleKills": 1,
+    "earlySurrenderAccomplice": false,
+    "firstBloodAssist": false,
+    "firstBloodKill": false,
+    "firstInhibitorAssist": fal...

@@ -68,6 +68,11 @@ app.get('/api/stats/advanced', ensureConnected, async (req, res) => {
             return res.json({ gamesAnalyzed: 0, error: '没有排位赛数据' });
         }
 
+        // Get current summoner info (ID and PUUID)
+        const currentSummonerInfo = await connector.request('/lol-summoner/v1/current-summoner');
+        const currentSummonerId = currentSummonerInfo.summonerId;
+        const currentPuuid = currentSummonerInfo.puuid;
+
         // Initialize accumulators
         let totalKills = 0, totalDeaths = 0, totalAssists = 0;
         let totalDamage = 0, totalDamageTaken = 0;
@@ -79,19 +84,82 @@ app.get('/api/stats/advanced', ensureConnected, async (req, res) => {
         let gamesAnalyzed = 0;
 
         // Process each game
-        for (const game of games) {
+        for (const summaryGame of games) {
+            // Fetch FULL game details to get all participants
+            let game;
+            try {
+                game = await connector.request(`/lol-match-history/v1/games/${summaryGame.gameId}`);
+            } catch (e) {
+                console.warn(`Failed to fetch details for game ${summaryGame.gameId}: ${e.message}`);
+                continue;
+            }
+
             if (!game.participants || game.participants.length === 0) continue;
 
-            // The first participant is always the current summoner in LCU match history
-            const player = game.participants[0];
+            let player = null;
+            let participantId = null;
+
+            // Strategy 1: Look in participantIdentities (if available) using PUUID
+            if (game.participantIdentities) {
+                const identity = game.participantIdentities.find(p => p.player.puuid === currentPuuid);
+                if (identity) {
+                    participantId = identity.participantId;
+                }
+            }
+
+            // Strategy 2: Look in participantIdentities using SummonerID (loose equality)
+            if (!participantId && game.participantIdentities) {
+                const identity = game.participantIdentities.find(p => p.player.summonerId == currentSummonerId);
+                if (identity) {
+                    participantId = identity.participantId;
+                }
+            }
+
+            // If we found a participantId, get the player object from participants
+            if (participantId) {
+                player = game.participants.find(p => p.participantId === participantId);
+            }
+
+            // Strategy 3: Look directly in participants using PUUID (some API versions)
+            if (!player) {
+                player = game.participants.find(p => p.puuid === currentPuuid);
+            }
+
+            // Strategy 4: Look directly in participants using SummonerID (loose equality)
+            if (!player) {
+                player = game.participants.find(p => p.summonerId == currentSummonerId);
+            }
+
+            // Fallback: Log warning and skip game (DO NOT use random player)
+            if (!player) {
+                console.warn(`Could not identify player in game ${game.gameId}. Skipping.`);
+                continue;
+            }
+
             if (!player || !player.stats) continue;
 
             const stats = player.stats;
             const gameDuration = (game.gameDuration || 1800) / 60; // Convert to minutes
 
             // Find player's team
-            const team = game.participants.filter(p => p.teamId === player.teamId);
-            if (team.length === 0) continue;
+            // Strategy 1: Filter by teamId using loose equality (==) to handle string/number mismatch
+            let team = game.participants.filter(p => p.teamId == player.teamId);
+
+            // Strategy 2: Fallback to participantId range if teamId matching failed (e.g. team size < 2)
+            // Standard LoL: 1-5 is Team 100 (Blue), 6-10 is Team 200 (Red)
+            if (team.length < 2 && player.participantId) {
+                const isTeam100 = player.participantId <= 5;
+                team = game.participants.filter(p => isTeam100 ? p.participantId <= 5 : p.participantId > 5);
+            }
+
+            // Fallback 3: Index based (Last resort if participantId is missing/weird)
+            if (team.length < 2) {
+                const playerIndex = game.participants.findIndex(p => p === player);
+                if (playerIndex >= 0) {
+                    const isBlue = playerIndex < 5;
+                    team = isBlue ? game.participants.slice(0, 5) : game.participants.slice(5, 10);
+                }
+            }
 
             // Calculate team totals
             const teamKills = team.reduce((sum, p) => sum + (p.stats?.kills || 0), 0);
@@ -131,18 +199,56 @@ app.get('/api/stats/advanced', ensureConnected, async (req, res) => {
                 losses++;
             }
 
-            // MVP/SVP calculation - highest KDA in the team
-            const playerKDA = (playerKills + playerAssists) / Math.max(playerDeaths, 1);
-            const teamKDAs = team.map(p => {
-                const k = p.stats?.kills || 0;
-                const d = p.stats?.deaths || 0;
-                const a = p.stats?.assists || 0;
-                return (k + a) / Math.max(d, 1);
-            });
-            const maxTeamKDA = Math.max(...teamKDAs);
+            // --- Weighted MVP/SVP Calculation ---
+            // Calculate scores for all team members
+            const teamScores = team.map(p => {
+                const pStats = p.stats || {};
+                const k = pStats.kills || 0;
+                const d = pStats.deaths || 0;
+                const a = pStats.assists || 0;
+                const dmg = pStats.totalDamageDealtToChampions || 0;
+                const taken = pStats.totalDamageTaken || 0;
+                const vision = pStats.visionScore || 0;
 
-            // Check if player has the highest KDA (with small tolerance for floating point comparison)
-            if (Math.abs(playerKDA - maxTeamKDA) < 0.01) {
+                const kda = (k + a) / Math.max(d, 1);
+                const dmgShare = teamDamage > 0 ? dmg / teamDamage : 0;
+                const takenShare = teamDamageTaken > 0 ? taken / teamDamageTaken : 0;
+                const particip = teamKills > 0 ? (k + a) / teamKills : 0;
+
+                return {
+                    participantId: p.participantId,
+                    kda,
+                    dmgShare,
+                    takenShare,
+                    vision,
+                    particip
+                };
+            });
+
+            // Find max values in team for normalization
+            const maxKDA = Math.max(...teamScores.map(s => s.kda), 1);
+            const maxDmgShare = Math.max(...teamScores.map(s => s.dmgShare), 0.01);
+            const maxTakenShare = Math.max(...teamScores.map(s => s.takenShare), 0.01);
+            const maxVision = Math.max(...teamScores.map(s => s.vision), 1);
+            const maxParticip = Math.max(...teamScores.map(s => s.particip), 0.01);
+
+            // Calculate final weighted score for each player
+            // Weights: KDA 30%, Damage 25%, Taken 15%, Vision 15%, Participation 15%
+            const scoredTeam = teamScores.map(s => {
+                const score =
+                    (s.kda / maxKDA) * 30 +
+                    (s.dmgShare / maxDmgShare) * 25 +
+                    (s.takenShare / maxTakenShare) * 15 +
+                    (s.vision / maxVision) * 15 +
+                    (s.particip / maxParticip) * 15;
+                return { ...s, score };
+            });
+
+            // Find the player with the highest score
+            const bestPlayer = scoredTeam.reduce((prev, current) => (prev.score > current.score) ? prev : current);
+
+            // Check if current player is the best player
+            if (bestPlayer.participantId === player.participantId) {
                 if (stats.win) {
                     mvpCount++;
                 } else {
