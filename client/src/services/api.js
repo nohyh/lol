@@ -24,9 +24,25 @@ export const getRankedStats = async () => {
     return response.data;
 };
 
-export const getAdvancedStats = async () => {
-    const response = await api.get('/stats/advanced');
-    return response.data;
+export const getAdvancedStats = async (puuid = null) => {
+    try {
+        const url = puuid ? `/stats/advanced?puuid=${puuid}` : '/stats/advanced';
+        const response = await api.get(url);
+        return response.data;
+    } catch (error) {
+        console.error("Error fetching advanced stats:", error);
+        throw error;
+    }
+};
+
+export const getSummonerByName = async (name) => {
+    try {
+        const response = await api.get(`/summoner/by-name/${encodeURIComponent(name)}`);
+        return response.data;
+    } catch (error) {
+        console.error("Error fetching summoner by name:", error);
+        throw error;
+    }
 };
 
 export const getLatestMatchDetails = async (matchIndex = 0) => {

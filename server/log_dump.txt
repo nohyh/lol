@@ -1,5 +1,0 @@
-﻿Found
-Log:
-H:\WeGameApps\英雄联盟\LeagueClient\2025-11-25T14-17-16_28424_LeagueClientUx.log
-Get-Content
-H:\WeGameApps\英雄联盟\LeagueClient\2025-11-25T14-17-16_28424_LeagueClientUx.log
